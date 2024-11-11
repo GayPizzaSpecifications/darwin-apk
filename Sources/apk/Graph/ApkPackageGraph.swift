@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import Foundation
+
 public class ApkPackageGraph {
   public let pkgIndex: ApkIndex
 
@@ -26,9 +28,9 @@ public class ApkPackageGraph {
       }
     }
 
-    for package in pkgIndex.packages {
-      self._nodes.append(.init(
-        package: package,
+    for (id, package) in pkgIndex.packages.enumerated() {
+      self._nodes.append(.init(self,
+        id: id,
         children: package.dependencies.compactMap { dependency in
           guard let id = provides[dependency.requirement.name] else {
             return nil
@@ -59,6 +61,117 @@ public class ApkPackageGraph {
 
     for (ref, parents) in reverseDependencies {
       self._nodes[ref.packageID].parents = parents
+    }
+  }
+}
+
+extension ApkPackageGraph {
+  func findDependencyCycle(node: ApkPackageGraphNode) -> (ApkPackageGraphNode, ApkPackageGraphNode)? {
+    var resolving = Set<ApkPackageGraphNode>()
+    var visited = Set<ApkPackageGraphNode>()
+    return self.findDependencyCycle(node: node, &resolving, &visited)
+  }
+
+  func findDependencyCycle(
+    node: ApkPackageGraphNode,
+    _ resolving: inout Set<ApkPackageGraphNode>,
+    _ visited: inout Set<ApkPackageGraphNode>
+  ) -> (ApkPackageGraphNode, ApkPackageGraphNode)? {
+    for dependency in node.children {
+      let depNode = self._nodes[dependency.packageID]
+      if resolving.contains(depNode) {
+        return (node, depNode)
+      }
+
+      if !visited.contains(depNode) {
+        resolving.insert(depNode)
+        if let cycle = findDependencyCycle(node: depNode, &resolving, &visited) {
+          return cycle
+        }
+
+        resolving.remove(depNode)
+        visited.insert(depNode)
+      }
+    }
+
+    return nil
+  }
+
+  public func parallelOrderSort(breakCycles: Bool = true) throws(SortError) -> [[ApkPackageGraphNode]] {
+    var results = [[ApkPackageGraphNode]]()
+
+    // Map all nodes to all of their children, remove any self dependencies
+    var working = self._nodes.reduce(into: [ApkPackageGraphNode: Set<ApkPackageGraphNode>]()) { d, node in
+      d[node] = Set(node.children.filter { child in
+        if case .dep(let version) = child.constraint {
+          version != .conflict && child.packageID != node.packageID
+        } else { false }
+      }.map { self._nodes[$0.packageID] })
+    }
+
+    // Collect all child nodes that aren't already in the map
+    // This should be empty every time
+    let extras = working.values.reduce(Set<ApkPackageGraphNode>()) { a, b in
+      a.union(b)
+    }.subtracting(working.keys)
+    assert(extras.isEmpty, "Dangling nodes in the graph")
+
+    // Put all extra nodes into the working map, with an empty set
+    extras.forEach {
+      working[$0] = .init()
+    }
+
+    while true {
+      // Set of all nodes now with satisfied dependencies
+      var set = working
+        .filter { _, children in children.isEmpty }
+        .map(\.key)
+
+      // If nothing was satisfied in this loop, check for cycles
+      // If no cycles exist and the working set is empty, resolve is complete
+      if set.isEmpty {
+        if working.isEmpty {
+          break
+        }
+
+        let cycles = working.keys.compactMap { node in
+          self.findDependencyCycle(node: node)
+        }
+
+        // Error if cycle breaking is turned off
+        if !breakCycles {
+          throw .cyclicDependency(cycles: cycles.map { node, dependency in
+              "\(node) -> \(dependency)"
+            }.joined(separator: "\n"))
+        }
+
+        // Bread cycles by setting the new resolution set to dependencies that cycled
+        set = cycles.map(\.1)
+      }
+
+      // Add installation set to list of installation sets
+      results.append(set)
+
+      // Filter the working set for anything that wasn't dealt with this iteration
+      working = working.filter { node, _ in
+        !set.contains(node)
+      }.reduce(into: [ApkPackageGraphNode: Set<ApkPackageGraphNode>]()) { d, node in
+        d[node.key] = node.value.subtracting(set)
+      }
+    }
+
+    print(working)
+
+    return results
+  }
+
+  public enum SortError: Error, LocalizedError {
+    case cyclicDependency(cycles: String)
+
+    var errorDescription: String {
+      switch self {
+      case .cyclicDependency(let cycles): "Dependency cycles found:\n\(cycles)"
+      }
     }
   }
 }

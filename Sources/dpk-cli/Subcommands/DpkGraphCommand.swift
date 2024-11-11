@@ -22,11 +22,20 @@ struct DpkGraphCommand: AsyncParsableCommand {
       fatalError(error.localizedDescription)
     }
 
+#if false
     if var out = TextFileWriter(URL(filePath: "shallowIsolates.txt")) {
       for node in graph.shallowIsolates { print(node, to: &out) }
     }
     if var out = TextFileWriter(URL(filePath: "deepIsolates.txt")) {
       for node in graph.deepIsolates { print(node, to: &out) }
     }
+#else
+    do {
+      let sorted = try graph.parallelOrderSort()
+      print(sorted)
+    } catch {
+      fatalError(error.localizedDescription)
+    }
+#endif
   }
 }

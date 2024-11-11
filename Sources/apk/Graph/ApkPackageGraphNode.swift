@@ -6,17 +6,32 @@
 import Foundation
 
 public class ApkPackageGraphNode {
-  private weak var graph: ApkPackageGraph!
-  let package: ApkIndexPackage
+  private weak var _graph: ApkPackageGraph?
+  let packageID: Int
 
   //private var _parents = NSHashTable<ApkPackageGraphNode>.weakObjects()
   //private var _children = NSHashTable<ApkPackageGraphNode>.weakObjects()
   var parents = [ApkIndexRequirementRef]()
   var children: [ApkIndexRequirementRef]
 
-  internal init(package: ApkIndexPackage, children: [ApkIndexRequirementRef]) {
-    self.package = package
+  var package: ApkIndexPackage {
+    self._graph!.pkgIndex.packages[self.packageID]
+  }
+
+  internal init(_ graph: ApkPackageGraph, id: Int, children: [ApkIndexRequirementRef]) {
+    self._graph = graph
+    self.packageID = id
     self.children = children
+  }
+}
+
+extension ApkPackageGraphNode: Equatable, Hashable {
+  public static func == (lhs: ApkPackageGraphNode, rhs: ApkPackageGraphNode) -> Bool {
+    lhs.packageID == rhs.packageID
+  }
+
+  public func hash(into hasher: inout Hasher) {
+    self.packageID.hash(into: &hasher)
   }
 }
 
